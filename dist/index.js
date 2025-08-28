@@ -39,7 +39,11 @@ function getAugmentedNamespace(n) {
   var f = n.default;
 	if (typeof f == "function") {
 		var a = function a () {
-			if (this instanceof a) {
+			var isInstance = false;
+      try {
+        isInstance = this instanceof a;
+      } catch {}
+			if (isInstance) {
         return Reflect.construct(f, arguments, this.constructor);
 			}
 			return f.apply(this, arguments);
@@ -58,8 +62,6 @@ function getAugmentedNamespace(n) {
 	});
 	return a;
 }
-
-var src = {};
 
 var core = {};
 
@@ -27275,6 +27277,8 @@ function requireCore () {
 	return core;
 }
 
+var coreExports = requireCore();
+
 var github = {};
 
 var context = {};
@@ -31228,74 +31232,61 @@ function requireGithub () {
 	return github;
 }
 
-var hasRequiredSrc;
+var githubExports = requireGithub();
 
-function requireSrc () {
-	if (hasRequiredSrc) return src;
-	hasRequiredSrc = 1;
-	const core = requireCore();
-	const github = requireGithub();
+async function run() {
+    try {
+        const oracHtpasswd = btoa(coreExports.getInput("orac_htpasswd"));
+        const endpointUrl = coreExports.getInput("endpoint_url");
 
-	async function run() {
-	    try {
-	        const oracHtpasswd = btoa(core.getInput("orac_htpasswd"));
-	        const endpointUrl = core.getInput("endpoint_url");
+        const { eventName, payload, sha, ref } = githubExports.context;
+        const isMergedPr =
+            eventName === "pull_request" && payload.pull_request.merged;
+        const isDirectPush = eventName === "push" && ref === "refs/heads/main";
 
-	        const { eventName, payload, sha, ref } = github.context;
-	        const isMergedPr =
-	            eventName === "pull_request" && payload.pull_request.merged;
-	        const isDirectPush = eventName === "push" && ref === "refs/heads/main";
+        if (!isMergedPr && !isDirectPush) {
+            coreExports.info("Not a merged PR or direct push to main - skipping");
+            return;
+        }
 
-	        if (!isMergedPr && !isDirectPush) {
-	            core.info("Not a merged PR or direct push to main - skipping");
-	            return;
-	        }
+        const actor = githubExports.context.actor;
+        if (actor.includes("dependabot")) {
+            coreExports.info("Dependabot triggered this - skipping");
+            return;
+        }
 
-	        const actor = github.context.actor;
-	        if (actor.includes("dependabot")) {
-	            core.info("Dependabot triggered this - skipping");
-	            return;
-	        }
+        const data = {
+            event_type: isMergedPr ? "pr_merged" : "direct_push",
+            branch: ref,
+            commit_sha: sha,
+            pusher: actor,
+        };
 
-	        const data = {
-	            event_type: isMergedPr ? "pr_merged" : "direct_push",
-	            branch: ref,
-	            commit_sha: sha,
-	            pusher: actor,
-	        };
+        if (isMergedPr) {
+            data.pr_title = payload.pull_request.title;
+            data.merger = payload.pull_request.merged_by.login;
+        }
 
-	        if (isMergedPr) {
-	            data.pr_title = payload.pull_request.title;
-	            data.merger = payload.pull_request.merged_by.login;
-	        }
+        const response = await fetch(endpointUrl, {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json",
+                Authorization: `Basic ${oracHtpasswd}`,
+            },
+            body: JSON.stringify(data),
+        });
+        if (!response.ok) {
+            coreExports.setFailed(
+                `Failed to trigger TI Suite: ${response.status} ${response.statusText}`,
+            );
+            return;
+        }
 
-	        const response = await fetch(endpointUrl, {
-	            method: "POST",
-	            headers: {
-	                "Content-Type": "application/json",
-	                Authorization: `Basic ${oracHtpasswd}`,
-	            },
-	            body: JSON.stringify(data),
-	        });
-	        if (!response.ok) {
-	            core.setFailed(
-	                `Failed to trigger TI Suite: ${response.status} ${response.statusText}`,
-	            );
-	            return;
-	        }
-
-	        core.info("Successfully triggered TI Suite");
-	    } catch (error) {
-	        core.setFailed(error.message);
-	    }
-	}
-
-	run();
-	return src;
+        coreExports.info("Successfully triggered TI Suite");
+    } catch (error) {
+        coreExports.setFailed(error.message);
+    }
 }
 
-var srcExports = requireSrc();
-var index = /*@__PURE__*/getDefaultExportFromCjs(srcExports);
-
-export { index as default };
+run();
 //# sourceMappingURL=index.js.map
